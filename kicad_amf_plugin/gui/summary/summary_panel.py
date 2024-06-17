@@ -14,6 +14,7 @@ from kicad_amf_plugin.gui.event.pcb_fabrication_evt_list import (
     PlaceOrder,
     OrderRegionChanged,
     SmtOrderRegionChanged,
+    GetUniqueValueFpCount,
 )
 
 from kicad_amf_plugin.kicad.helpers import get_valid_footprints
@@ -41,10 +42,6 @@ class PriceCategory(Enum):
     PCB = "pcb"
     SMT = "smt"
 
-pcb_price_model = { PriceCategory.PCB: PCBPriceModel() }
-smt_price_model = { PriceCategory.PCB: pcb_price_model[PriceCategory.PCB],
-                PriceCategory.SMT: SmtPriceModel(),
-                }
 
 class SummaryPanel(UiSummaryPanel):
     def __init__(self, parent, board_manager: BoardManager):
@@ -64,11 +61,14 @@ class SummaryPanel(UiSummaryPanel):
             PriceCategory.PCB: PCBPriceModel(),
             PriceCategory.SMT: SmtPriceModel(),
         }
+        self.pcb_price_model = { PriceCategory.PCB: PCBPriceModel() }
+        self.smt_price_model = { PriceCategory.PCB: self.pcb_price_model[PriceCategory.PCB],
+                PriceCategory.SMT: SmtPriceModel(),
+                }
 
         self.init_ui()
         self.load_Designator()
         self.btn_update_price.Bind(wx.EVT_BUTTON, self.on_update_price_clicked)
-        
         self.btn_place_order.Bind(wx.EVT_BUTTON, self.on_place_order_clicked)
         # self.choice_order_region.Bind(wx.EVT_CHOICE, self.on_region_changed)
         self.Bind(
@@ -77,6 +77,7 @@ class SummaryPanel(UiSummaryPanel):
             self.splitter_detail_summary,
         )
         self.btn_bom_match.Bind(wx.EVT_BUTTON, self.on_bom_match)
+
         
         SETTING_MANAGER.set_order_region(SupportedRegion.CHINA_MAINLAND)
 
@@ -148,12 +149,9 @@ class SummaryPanel(UiSummaryPanel):
         )
 
 
-        self.model_price_summary = PriceSummaryModel( pcb_price_model )
+        self.model_price_summary = PriceSummaryModel( self.pcb_price_model )
         self.list_price_detail.AssociateModel(self.model_price_summary)
-        # self.choice_order_region.AppendItems(
-        #     [i.DisplayRole for i in OrderRegionSettings]
-        # )
-        # self.choice_order_region.SetSelection(SETTING_MANAGER.order_region)
+
 
         max_width = 300
         for view in self.list_order_summary, self.list_price_detail:
@@ -191,9 +189,18 @@ class SummaryPanel(UiSummaryPanel):
             self.board_type_text.Show(True)
         wx.CallAfter(self.switch_amf_panel.Layout)
 
+    def ShowTipMinTraceOuter( self, selected_min_trace_width ):
+        if selected_min_trace_width > 2:
+            self.min_trace_outer_text.Show(True)
+        else:
+            self.min_trace_outer_text.Show(False)
+        wx.CallAfter(self.switch_amf_panel.Layout)
 
     def is_database_exists(self):
         result = os.path.exists(self.db_file_path)
+        
+        evt = GetUniqueValueFpCount(-1, unique_value_fp_count = self.store.get_unique_value_fp_count() )
+        wx.PostEvent(self.Parent, evt)
         parts = self.store.get_reference_mpn_footprint()
         mpn_values = [part[1] for part in parts]
         all_empty = all(value == '' for value in mpn_values)
@@ -203,6 +210,7 @@ class SummaryPanel(UiSummaryPanel):
         parts = []
         self.list_bom_view.DeleteAllItems()
         parts = self.store.get_reference_mpn_footprint()
+
         for part in parts:
             self.list_bom_view.AppendItem(part)
 
@@ -247,14 +255,6 @@ class SummaryPanel(UiSummaryPanel):
             pcb_file_name=os.path.basename(pcb_file),
         )
 
-    def on_bom_match(self, e):
-        dlg = NextPCBTools(self, self._board_manager)
-        result = dlg.ShowModal()
-        dlg.generate_fabrication_data(e)
-        self.get_data()
-        self.get_files()
-        if result in (wx.ID_OK, wx.ID_CANCEL):
-            dlg.Destroy()
 
     def switch_to_amf(self):
         self.switch_smt_splitter.Unsplit(self.switch_smt_panel)
@@ -266,7 +266,7 @@ class SummaryPanel(UiSummaryPanel):
         
         wx.CallAfter(self.switch_smt_splitter.UpdateSize)
         wx.CallAfter(self.splitter_detail_summary.UpdateSize)
-        self.model_price_summary = PriceSummaryModel( pcb_price_model )
+        self.model_price_summary = PriceSummaryModel( self.pcb_price_model )
         self.list_price_detail.AssociateModel(self.model_price_summary)
         
         
@@ -279,7 +279,7 @@ class SummaryPanel(UiSummaryPanel):
         self.switch_smt_splitter.SetSashPosition(sash_position)
         wx.CallAfter(self.switch_smt_splitter.UpdateSize)
         wx.CallAfter(self.splitter_detail_summary.UpdateSize) 
-        self.model_price_summary = PriceSummaryModel( smt_price_model )
+        self.model_price_summary = PriceSummaryModel( self.smt_price_model )
         self.list_price_detail.AssociateModel(self.model_price_summary)
 
     def splitter_detail_summaryOnIdle(self, event):
@@ -297,6 +297,15 @@ class SummaryPanel(UiSummaryPanel):
     def update_order_summary(self, price_summary: "list"):
         self.model_order_summary.update_order_info(price_summary)
 
+
+    def on_bom_match(self, e):
+        dlg = NextPCBTools(self, self._board_manager)
+        result = dlg.ShowModal()
+        if result in (wx.ID_OK, wx.ID_CANCEL):
+            dlg.Destroy()
+        self.load_Designator()
+        
+
     def on_update_price_clicked(self, ev):
         self.clear_content()
         evt = UpdatePrice(id=-1)
@@ -305,6 +314,14 @@ class SummaryPanel(UiSummaryPanel):
     def on_place_order_clicked(self, ev):
         evt = PlaceOrder(id=-1)
         wx.PostEvent(self.Parent, evt)
+
+    def on_generate_fabrication_file(self ):
+        dlg = NextPCBTools(self, self._board_manager)
+        dlg.generate_fabrication_data()
+        self.get_data()
+        self.get_files()
+        dlg.Destroy()
+
 
     def on_sash_changed(self, evt):
         sash_pos = evt.GetSashPosition()
